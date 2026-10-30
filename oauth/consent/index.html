@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Company Brain · Autorizar acesso</title>
+<style>
+  :root { --fundo:#f6f5f2; --cartao:#fff; --texto:#1d1d1b; --suave:#6b6a66; --borda:#e3e1dc; --acento:#1f4e46; --erro:#a3341f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fundo:#161615; --cartao:#201f1d; --texto:#ecebe7; --suave:#a3a19b; --borda:#34322e; --acento:#7fbfae; --erro:#e07a62; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px;
+         background:var(--fundo); color:var(--texto); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width:100%; max-width:420px; background:var(--cartao); border:1px solid var(--borda); border-radius:14px; padding:28px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--suave); margin:0 0 20px; font-size:14px; }
+  ul { padding-left:18px; margin:8px 0 20px; color:var(--suave); font-size:14px; }
+  .botoes { display:flex; gap:10px; flex-wrap:wrap; }
+  button { flex:1; font:inherit; padding:10px 14px; border-radius:9px; border:1px solid var(--borda);
+           background:transparent; color:var(--texto); cursor:pointer; }
+  button.principal { background:var(--acento); border-color:var(--acento); color:var(--cartao); font-weight:600; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .erro { color:var(--erro); }
+  .quem { font-size:13px; color:var(--suave); margin-top:18px; }
+  .quem a { color:inherit; }
+</style>
+</head>
+<body>
+<main id="app"><p class="sub">Carregando…</p></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.0/dist/umd/supabase.js"></script>
+<script>
+// Tela de consentimento do OAuth do Supabase: a IA (Claude, ChatGPT...) manda o usuário para cá
+// com ?authorization_id=...; ele entra com o Google e aprova. Sem segredos aqui: a chave
+// publicável é pública por definição e o acesso aos dados é decidido pela RLS do banco.
+const SUPABASE_URL = 'https://sirettuzmxqzilpaazlf.supabase.co'
+const SUPABASE_KEY = 'sb_publishable_mbodXwgdLpiw7AZJTt7G-w_IXvm_Ozk'
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { flowType: 'pkce' } })
+const app = document.getElementById('app')
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
+
+function tela(html) { app.innerHTML = html }
+function falha(msg) { tela(`<h1>Company Brain</h1><p class="erro">${esc(msg)}</p>`) }
+
+async function iniciar() {
+  const params = new URLSearchParams(location.search)
+  const authorizationId = params.get('authorization_id')
+  if (!authorizationId) return falha('Link de autorização inválido. Comece pela sua IA (Claude, ChatGPT…) ao conectar o Company Brain.')
+
+  // Volta do Google com ?code=...: o supabase-js troca pela sessão; tiramos o code da URL.
+  const { data: { session } } = await sb.auth.getSession()
+  if (params.has('code')) history.replaceState(null, '', `${location.pathname}?authorization_id=${encodeURIComponent(authorizationId)}`)
+
+  if (!session) {
+    tela(`<h1>Company Brain</h1>
+      <p class="sub">Entre com a sua conta Google da empresa para conectar a sua IA ao Company Brain.</p>
+      <div class="botoes"><button class="principal" id="google">Entrar com Google</button></div>`)
+    document.getElementById('google').onclick = async (ev) => {
+      ev.target.disabled = true
+      const volta = `${location.origin}${location.pathname}?authorization_id=${encodeURIComponent(authorizationId)}`
+      const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: volta, queryParams: { prompt: 'select_account' } } })
+      if (error) falha(error.message)
+    }
+    return
+  }
+
+  const email = session.user.email
+  // Só e-mails cadastrados leem os dados (RLS). Se a consulta volta vazia, nem adianta autorizar.
+  const { data: teste } = await sb.from('entidades').select('id').limit(1)
+  const autorizado = !!teste?.length
+
+  const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId)
+  if (error) return falha(`Não foi possível ler o pedido de autorização: ${error.message}`)
+  if (!('authorization_id' in data)) { location.href = data.redirect_url; return }  // já autorizado antes
+
+  const sair = `<p class="quem">Conectado como ${esc(email)} · <a href="#" id="sair">trocar de conta</a></p>`
+  if (!autorizado) {
+    tela(`<h1>Acesso não liberado</h1>
+      <p class="sub">O e-mail <b>${esc(email)}</b> não está na lista de usuários do Company Brain. Peça a liberação ao administrador.</p>
+      <div class="botoes"><button id="negar">Voltar</button></div>${sair}`)
+  } else {
+    tela(`<h1>Autorizar ${esc(data.client?.name || 'aplicativo')}</h1>
+      <p class="sub">Este aplicativo quer acessar o Company Brain em seu nome.</p>
+      <ul>
+        <li>Buscar e ler documentos do Drive da Árpoa</li>
+        <li>Consultar empresas e participações</li>
+        <li>Somente leitura — nada é alterado</li>
+      </ul>
+      <p class="sub">Volta para: ${esc(new URL(data.redirect_uri).host)}</p>
+      <div class="botoes"><button id="negar">Recusar</button><button class="principal" id="aprovar">Autorizar</button></div>${sair}`)
+    document.getElementById('aprovar').onclick = async (ev) => {
+      ev.target.disabled = true
+      const { error } = await sb.auth.oauth.approveAuthorization(authorizationId)
+      if (error) falha(error.message)
+    }
+  }
+  document.getElementById('negar').onclick = async (ev) => {
+    ev.target.disabled = true
+    const { error } = await sb.auth.oauth.denyAuthorization(authorizationId)
+    if (error) falha(error.message)
+  }
+  document.getElementById('sair').onclick = async (ev) => {
+    ev.preventDefault()
+    await sb.auth.signOut()
+    location.reload()
+  }
+}
+
+iniciar().catch((e) => falha(e.message || String(e)))
+</script>
+</body>
+</html>
